@@ -28,14 +28,15 @@ struct matd {
 	}
 };
 
-//template<typename U>
-//struct U {
-//	U *data;
-//	const size_t sz;
-//	bool operator==(const U &rhs) const {
-//		return !std::memcmp(data, rhs.data, sizeof(sz*sz * sizeof(data[0]))); // How do you setup this type to be based on a generic one that's passed in at compile time?
-//	}
-//};
+template <typename T>
+struct Gen {
+	Gen(T x) : x(x) {}
+	T *data;
+	const size_t sz;
+	bool operator==(const T &rhs) const {
+		return !std::memcmp(data, rhs.data, sizeof(sz*sz * sizeof(data[0]))); // How to setup the correct type using template?
+	}
+};
 
 void matmul(mat &mres, const mat &m1, const mat &m2)
 {
@@ -108,7 +109,7 @@ void SIMD_matmul(matd &mres, const matd &m1, const matd &m2)
 //	{
 //		// Collect the rows of the matrix
 //		T vx = _mm256_broadcast_sd(&m1.data[i*mres.sz]);
-//		T vy = _mm256_broadcast_sd(&m1.data[i*mres.sz + 1]); // How do you select the correct funtion based on T's type?
+//		T vy = _mm256_broadcast_sd(&m1.data[i*mres.sz + 1]);            // How do you select the correct funtion based on T's type?
 //		T vz = _mm256_broadcast_sd(&m1.data[i*mres.sz + 2]);
 //		T vw = _mm256_broadcast_sd(&m1.data[i*mres.sz + 3]);
 //
@@ -126,26 +127,6 @@ void SIMD_matmul(matd &mres, const matd &m1, const matd &m2)
 //		// Store answer in mres, starting at the index specified
 //		_mm256_store_pd(&mres.data[i*mres.sz], vx);
 //	}
-//}
-
-//void print_mat(const mat &m) {
-//  for (int i = 0; i < m.sz; i++) {
-//    for (int j = 0; j < m.sz; j++) {
-//      std::cout << std::setw(3) << m.data[i*m.sz+j] << ' ';
-//    }
-//    std::cout << '\n';
-//  }
-//  std::cout << '\n';
-//}
-//
-//void print_mat(const matd &m) {
-//	for (int i = 0; i < m.sz; i++) {
-//		for (int j = 0; j < m.sz; j++) {
-//			std::cout << std::setw(3) << m.data[i*m.sz + j] << ' ';
-//		}
-//		std::cout << '\n';
-//	}
-//	std::cout << '\n';
 //}
 
 template <typename T>
@@ -175,23 +156,6 @@ void init_mat(T &m) {
     }
   }
 }
-//void init_mat(mat &m) {
-//  int count = 1;
-//  for (int i = 0; i < m.sz; i++) {
-//    for (int j = 0; j < m.sz; j++) {
-//      m.data[i*m.sz+j] = count++;
-//    }
-//  }
-//}
-//
-//void init_mat(matd &m) {
-//	int count = 1;
-//	for (int i = 0; i < m.sz; i++) {
-//		for (int j = 0; j < m.sz; j++) {
-//			m.data[i*m.sz + j] = count++;
-//		}
-//	}
-//}
 
 // Creates an identity matrix. For a 4x4 matrix:
 
@@ -199,24 +163,6 @@ void init_mat(T &m) {
 // 0 1 0 0
 // 0 0 1 0
 // 0 0 0 1
-
-//void identity_mat(mat &m) {
-//  int count = 0;
-//  for (int i = 0; i < m.sz; i++) {
-//    for (int j = 0; j < m.sz; j++) {
-//      m.data[i*m.sz+j] = (count++ % (m.sz+1)) ? 0 : 1;
-//    }
-//  }
-//}
-//
-//void identity_mat(matd &m) {
-//	int count = 0;
-//	for (int i = 0; i < m.sz; i++) {
-//		for (int j = 0; j < m.sz; j++) {
-//			m.data[i*m.sz + j] = (count++ % (m.sz + 1)) ? 0 : 1;
-//		}
-//	}
-//}
 
 template <typename T>
 void identity_mat(T &m) {
