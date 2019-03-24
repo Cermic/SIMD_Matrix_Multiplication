@@ -32,16 +32,6 @@ struct matd {
 	}
 };
 
-template <typename T>
-struct Gen {
-	//Gen(T x) : x(x) {}
-	T *data;
-	const size_t sz;
-	bool operator==(const T &rhs) const {
-		return !std::memcmp(data, rhs.data, sz*sz * sizeof(data[0])); // How to setup the correct type using template?
-	}
-};
-
 void matmul(mat &mres, const mat &m1, const mat &m2)
 {
   for (int i = 0; i < mres.sz; i++) {
@@ -53,103 +43,6 @@ void matmul(mat &mres, const mat &m1, const mat &m2)
     }
   }
 }
-
-void SIMD_matmul (mat &mres, const mat &m1, const mat &m2)
-{
-	for (int i = 0; i < mres.sz; i++)
-	{
-		// Collect the rows of the matrix
-		__m128 vx = _mm_broadcast_ss(&m1.data[i*mres.sz]); // broadcast fills the container with the value at the index
-		__m128 vy = _mm_broadcast_ss(&m1.data[i*mres.sz + 1]); // Why are we broadcasting here? Why does the whole __m128 need to be the same number?
-		__m128 vz = _mm_broadcast_ss(&m1.data[i*mres.sz + 2]);
-		__m128 vw = _mm_broadcast_ss(&m1.data[i*mres.sz + 3]);
-
-		// Perform the multiplication on the rows by the columns
-		__m128 tmp = _mm_load_ps(&m2.data[0 * mres.sz]); // Loads the value in the index to the first slot in the container
-		vx = _mm_mul_ps(vx, _mm_load_ps(&m2.data[0 * mres.sz])); // How does this know to do a column instead of a row?
-		vy = _mm_mul_ps(vy, _mm_load_ps(&m2.data[mres.sz]));
-		vz = _mm_mul_ps(vz, _mm_load_ps(&m2.data[2 * mres.sz]));
-		vw = _mm_mul_ps(vw, _mm_load_ps(&m2.data[3 * mres.sz]));
-
-		// Perform a binary add to reduce cumulative errors
-		vx = _mm_add_ps(vx, vz); // adds the values in vx and vz together
-		vy = _mm_add_ps(vy, vw); // adds the values in vy and vw together
-		vx = _mm_add_ps(vx, vy); // Joins the values in vx and vy, resulting in the whole row.
-
-		// Store answer in mres, starting at the index specified
-		_mm_store_ps(&mres.data[i*mres.sz], vx);
-	}
-}
-
-void SIMD_matmul(matd &mres, const matd &m1, const matd &m2)
-{
-	for (int i = 0; i < mres.sz; i++)
-	{
-		// Collect the rows of the matrix
-		__m256d vx = _mm256_broadcast_sd(&m1.data[i*mres.sz]);
-		__m256d vy = _mm256_broadcast_sd(&m1.data[i*mres.sz + 1]);
-		__m256d vz = _mm256_broadcast_sd(&m1.data[i*mres.sz + 2]);
-		__m256d vw = _mm256_broadcast_sd(&m1.data[i*mres.sz + 3]);
-		
-		// Perform the multiplication on the rows
-		vx = _mm256_mul_pd(vx, _mm256_load_pd(&m2.data[0 * mres.sz]));
-		vy = _mm256_mul_pd(vy, _mm256_load_pd(&m2.data[mres.sz]));
-		vz = _mm256_mul_pd(vz, _mm256_load_pd(&m2.data[2 * mres.sz]));
-		vw = _mm256_mul_pd(vw, _mm256_load_pd(&m2.data[3 * mres.sz]));
-
-		// Perform a binary add to reduce cumulative errors
-		vx = _mm256_add_pd(vx, vz);
-		vy = _mm256_add_pd(vy, vw);
-		vx = _mm256_add_pd(vx, vy);
-
-		// Store answer in mres, starting at the index specified
-		_mm256_store_pd(&mres.data[i*mres.sz], vx);
-	}
-}
-//int AddI(int x, int y)
-//{
-//	return x + y;
-//}
-//template <typename V, auto AddI>
-//int jack_fn(int x, int y) {
-//	V vx = AddI(x, y);
-//	return vx;
-//}
-//
-//template <typename V, auto Add>
-//void jack_Add(V m) 
-//{
-//	__m128 x = _mm_broadcast_ss(&m.data[0]);
-//	__m128 y = _mm_broadcast_ss(&m.data[4]);
-//	x = Add(x, y);
-//}
-
-////template  <typename V, auto Broadcast, auto Multiply, auto Load, auto Add, auto Store, typename T>
-////void SIMD_matmul(T &mres, const T &m1, const T &m2)
-//{
-//	for (int i = 0; i < mres.sz; i++)
-//	{
-//		// Collect the rows of the matrix
-//		V vx = Broadcast(&m1.data[i*mres.sz]);
-//		V vy = Broadcast(&m1.data[i*mres.sz + 1]);
-//		V vz = Broadcast(&m1.data[i*mres.sz + 2]);
-//		V vw = Broadcast(&m1.data[i*mres.sz + 3]);
-//
-//		// Perform the multiplication on the rows
-//		vx = Multiply(vx, Load(&m2.data[0 * mres.sz]));
-//		vy = Multiply(vy, Load(&m2.data[mres.sz]));
-//		vz = Multiply(vz, Load(&m2.data[2 * mres.sz]));
-//		vw = Multiply(vw, Load(&m2.data[3 * mres.sz]));
-//
-//		// Perform a binary add to reduce cumulative errors
-//		vx = Add(vx, vz);
-//		vy = Add(vy, vw);
-//		vx = Add(vx, vy);
-//
-//		// Store answer in mres, starting at the index specified
-//		Store(&mres.data[i*mres.sz], vx);
-//	}
-//}
 
 template <typename T>
 void print_mat(const T &m) {
@@ -195,12 +88,6 @@ void identity_mat(T &m) {
 		}
 	}
 }
-
-////template <typename Vt, auto Broadcast>
-////void jack_fn() {
-//	float f{ 42.0f };
-//	Vt vx = Broadcast(&f);
-//}
 
 float SIMD_VReduce(__m128 v, const size_t size)
 {
