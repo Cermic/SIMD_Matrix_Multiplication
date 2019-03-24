@@ -1,0 +1,13 @@
+1. How do you account for the different sized Matricies?
+   as an __m128 for example won't hold values from an 
+   8x8 properly. 
+  Is there another layer to the loops that 
+  can be done? Or do we have to change the intrinsic / sse methods used on a case by case basis?
+
+2. What is the double precision version of _mm_store_ss?
+   So I can store a double precision __m256d. I'm sticking    to blocks of 4 which is why I'm using __m256d instead
+   of __m256.
+  
+3. How can I incoportare POSIX threads into my program?
+
+4. What code can I remove from the matrix multiplcation    for the benchmarking?
