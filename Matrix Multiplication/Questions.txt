@@ -1,0 +1,5 @@
+1. Can I make the matrix generic by passing in the float / double type as a parameter?
+
+2. void SIMD_MatMul(mat &mres, const mat &m1, const mat &m2) // A way to determine the type of a parameter?
+
+3. Why hadd on doubles not work?
