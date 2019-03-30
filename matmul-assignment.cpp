@@ -1,8 +1,14 @@
 #include <iostream>
 #include <iomanip>
+#include <cstdlib>
 #include <cstring>
 #include <chrono>
 #include <immintrin.h>
+#ifdef __ORBIS__
+#include <stdlib.h>
+size_t sceLibcHeapSize = SCE_LIBC_HEAP_SIZE_EXTENDED_ALLOC_NO_LIMIT;
+unsigned int sceLibcHeapExtendedAlloc = 1;
+#endif
 
 // $CXX -03 -mavx matmul_assignment.cpp
 
@@ -10,35 +16,28 @@
 #pragma clang diagnostic ignored "-Wc++17-extensions"
 #endif
 
-#define SZ (1 << 2) // (1 << 10) == 1024
+#define SZ (1 << 2)  /*(1 << 10)*/ // == 1024
+// use new align
+// use std::begin and std::end on all containter now
 
 struct mat {
   float *data;
   const size_t sz;
   bool operator==(const mat &rhs) const {
-    return !std::memcmp(data,rhs.data,sizeof(sz*sz*sizeof(data[0])));
+    return !std::memcmp(data,rhs.data,sz*sz*sizeof(data[0]));
   }
 };
-
+ // Can I make this generic by passing in the float / double type as a parameter?
 struct matd {
 	double *data;
 	const size_t sz;
 	bool operator==(const matd &rhs) const {
-		return !std::memcmp(data, rhs.data, sizeof(sz*sz * sizeof(data[0])));
+		return !std::memcmp(data, rhs.data,sz*sz * sizeof(data[0]));
 	}
 };
 
 template <typename T>
-struct Gen {
-	Gen(T x) : x(x) {}
-	T *data;
-	const size_t sz;
-	bool operator==(const T &rhs) const {
-		return !std::memcmp(data, rhs.data, sizeof(sz*sz * sizeof(data[0]))); // How to setup the correct type using template?
-	}
-};
-
-void matmul(mat &mres, const mat &m1, const mat &m2)
+void matmul(T &mres, const T &m1, const T &m2)
 {
   for (int i = 0; i < mres.sz; i++) {
     for (int j = 0; j < mres.sz; j++) {
@@ -48,99 +47,20 @@ void matmul(mat &mres, const mat &m1, const mat &m2)
       }
     }
   }
-}
-
-void SIMD_matmul (mat &mres, const mat &m1, const mat &m2)
-{
-	for (int i = 0; i < mres.sz; i++)
-	{
-		// Collect the rows of the matrix
-		__m128 vx = _mm_broadcast_ss(&m1.data[i*mres.sz]);
-		__m128 vy = _mm_broadcast_ss(&m1.data[i*mres.sz + 1]);
-		__m128 vz = _mm_broadcast_ss(&m1.data[i*mres.sz + 2]);
-		__m128 vw = _mm_broadcast_ss(&m1.data[i*mres.sz + 3]);
-
-		// Perform the multiplication on the rows
-		vx = _mm_mul_ps(vx, _mm_load_ps(&m2.data[0 * mres.sz]));
-		vy = _mm_mul_ps(vy, _mm_load_ps(&m2.data[mres.sz]));
-		vz = _mm_mul_ps(vz, _mm_load_ps(&m2.data[2 * mres.sz]));
-		vw = _mm_mul_ps(vw, _mm_load_ps(&m2.data[3 * mres.sz]));
-
-		// Perform a binary add to reduce cumulative errors
-		vx = _mm_add_ps(vx, vz);
-		vy = _mm_add_ps(vy, vw);
-		vx = _mm_add_ps(vx, vy);
-
-		// Store answer in mres, starting at the index specified
-		_mm_store_ps(&mres.data[i*mres.sz], vx);
-	}
-}
-
-void SIMD_matmul(matd &mres, const matd &m1, const matd &m2)
-{
-	for (int i = 0; i < mres.sz; i++)
-	{
-		// Collect the rows of the matrix
-		__m256d vx = _mm256_broadcast_sd(&m1.data[i*mres.sz]);
-		__m256d vy = _mm256_broadcast_sd(&m1.data[i*mres.sz + 1]);
-		__m256d vz = _mm256_broadcast_sd(&m1.data[i*mres.sz + 2]);
-		__m256d vw = _mm256_broadcast_sd(&m1.data[i*mres.sz + 3]);
-		
-		// Perform the multiplication on the rows
-		vx = _mm256_mul_pd(vx, _mm256_load_pd(&m2.data[0 * mres.sz]));
-		vy = _mm256_mul_pd(vy, _mm256_load_pd(&m2.data[mres.sz]));
-		vz = _mm256_mul_pd(vz, _mm256_load_pd(&m2.data[2 * mres.sz]));
-		vw = _mm256_mul_pd(vw, _mm256_load_pd(&m2.data[3 * mres.sz]));
-
-		// Perform a binary add to reduce cumulative errors
-		vx = _mm256_add_pd(vx, vz);
-		vy = _mm256_add_pd(vy, vw);
-		vx = _mm256_add_pd(vx, vy);
-
-		// Store answer in mres, starting at the index specified
-		_mm256_store_pd(&mres.data[i*mres.sz], vx);
-	}
-}
-
-//template <typename T>
-//void SIMD_matmul(T &mres, const T &m1, const T &m2)
-//{
-//	for (int i = 0; i < mres.sz; i++)
-//	{
-//		// Collect the rows of the matrix
-//		T vx = _mm256_broadcast_sd(&m1.data[i*mres.sz]);
-//		T vy = _mm256_broadcast_sd(&m1.data[i*mres.sz + 1]);            // How do you select the correct funtion based on T's type?
-//		T vz = _mm256_broadcast_sd(&m1.data[i*mres.sz + 2]);
-//		T vw = _mm256_broadcast_sd(&m1.data[i*mres.sz + 3]);
-//
-//		// Perform the multiplication on the rows
-//		vx = _mm256_mul_pd(vx, _mm256_load_pd(&m2.data[0 * mres.sz]));
-//		vy = _mm256_mul_pd(vy, _mm256_load_pd(&m2.data[mres.sz]));
-//		vz = _mm256_mul_pd(vz, _mm256_load_pd(&m2.data[2 * mres.sz]));
-//		vw = _mm256_mul_pd(vw, _mm256_load_pd(&m2.data[3 * mres.sz]));
-//
-//		// Perform a binary add to reduce cumulative errors
-//		vx = _mm256_add_pd(vx, vz);
-//		vy = _mm256_add_pd(vy, vw);
-//		vx = _mm256_add_pd(vx, vy);
-//
-//		// Store answer in mres, starting at the index specified
-//		_mm256_store_pd(&mres.data[i*mres.sz], vx);
-//	}
-//}
+} 
 
 template <typename T>
 void print_mat(const T &m) {
 	for (int i = 0; i < m.sz; i++) {
 		for (int j = 0; j < m.sz; j++) {
-			std::cout << std::setw(3) << m.data[i*m.sz + j] << ' ';
+			std::cout << std::setw(3) << std::setprecision(0) << m.data[i*m.sz + j] << ' ';
 		}
 		std::cout << '\n';
 	}
 	std::cout << '\n';
 }
 
-// A simply initialisation pattern. For a 4x4 matrix:
+// A simple initialisation pattern. For a 4x4 matrix:
 
 // 1   2  3  4
 // 5   6  7  8
@@ -174,92 +94,276 @@ void identity_mat(T &m) {
 	}
 }
 
+void SIMD_MatMul(mat &mres, const mat &m1, const mat &m2) // A way to determine the type of a parameter?
+{
+	size_t const simdSize = sizeof(__m128) / sizeof(float);
+	__m128 row, column, dotProduct, vsum;
+	float columnSections[SZ];
+	for (int i = 0; i < mres.sz; i++) 
+	{
+		for (int j = 0; j < mres.sz; j++)
+		{
+			for (int y = 0; y < mres.sz; y++)
+			{
+				columnSections[y] = m2.data[y *mres.sz + j];			// 1. Get column data
+			}
+			/*_mm_dp_ps(row, column, What is the third parameter here?);
+			https://software.intel.com/sites/landingpage/IntrinsicsGuide/#text=_mm_dp_ps&expand=2160
+			*/
+			vsum = _mm_set_ps1(0.0f);
+			for (std::size_t z = 0; z < mres.sz; z += simdSize)				// Runs once per vector.	
+			{
+				row = _mm_load_ps(&m1.data[i* mres.sz + z]);				// 2. Get Row Values.
+				column = _mm_load_ps(&columnSections[z]);					// 3. Place column values into an __m128
+				dotProduct = _mm_mul_ps(row, column);						// 4. Compute dot product of row and column
+				vsum = _mm_add_ps(vsum, dotProduct);
+			}
+				vsum = _mm_hadd_ps(vsum, vsum);
+				vsum = _mm_hadd_ps(vsum, vsum);								// 5. Reduce to a single float
+				mres.data[i*mres.sz + j] = _mm_cvtss_f32(vsum);
+				//_mm_store_ss(&mres.data[i*mres.sz + j], vsum);	            // 6. Store float in appropriate index.
+		}				
+	}
+}
+
+
+void SIMD_MatMul(matd &mres, const matd &m1, const matd &m2)
+{
+	size_t const simdSize = sizeof(__m256d) / sizeof(double);
+	__m256d row, column, dotProduct, vsum;
+	double columnSections[SZ];
+	for (int i = 0; i < mres.sz; i++)
+	{
+		for (int j = 0; j < mres.sz; j++)
+		{
+			for (int y = 0; y < mres.sz; y++)
+			{
+				columnSections[y] = m2.data[y *mres.sz + j];				// 1. Get column data
+			}
+			vsum = _mm256_set1_pd(0.0);
+			for (std::size_t z = 0; z < mres.sz; z += simdSize)				// Runs once per vector.	
+			{
+				row = _mm256_load_pd(&m1.data[i* mres.sz + z]);				// 2. Get Row Values.
+				column = _mm256_load_pd(&columnSections[z]);				// 3. Place column values into an __m256d
+				dotProduct = _mm256_mul_pd(row, column);					// 4. Compute dot product of row and column
+				vsum = _mm256_add_pd(vsum, dotProduct);
+			}
+			vsum = _mm256_hadd_pd(vsum, vsum); // This seems to go wrong - vsums the first 2 instead of 1,3 -> 2,4. Is this alignment? Consider broadcast here instead.
+			vsum = _mm256_hadd_pd(vsum, vsum); // 5. Reduce to a single float
+			mres.data[i*mres.sz + j] = _mm256_cvtsd_f64(vsum);	            // 6. Store float in appropriate index.
+		}
+	}
+}
+
+//void SIMD_MatMul(matd &mres, const matd &m1, const matd &m2)
+//{
+//	size_t const simdSize = sizeof(__m128d) / sizeof(double);
+//	__m128d row, column, dotProduct, vsum;
+//	double columnSections[SZ];
+//	for (int i = 0; i < mres.sz; i++)
+//	{
+//		for (int j = 0; j < mres.sz; j++)
+//		{
+//			for (int y = 0; y < mres.sz; y++)
+//			{
+//				columnSections[y] = m2.data[y *mres.sz + j];			// 1. Get column data
+//			}
+//			vsum = _mm_set1_pd(0.0);
+//			for (std::size_t z = 0; z < mres.sz; z += simdSize)				// Runs once per vector.	
+//			{
+//				row = _mm_load_pd(&m1.data[i* mres.sz + z]);				// 2. Get Row Values.
+//				column = _mm_load_pd(&columnSections[z]);					// 3. Place column values into an __m128
+//				dotProduct = _mm_mul_pd(row, column);						// 4. Compute dot product of row and column
+//				vsum = _mm_add_pd(vsum, dotProduct);
+//			}
+//			vsum = _mm_hadd_pd(vsum, vsum);	
+//			// 5. Reduce to a single float
+//			_mm_store_sd(&mres.data[i*mres.sz + j], vsum);	            // 6. Store float in appropriate index.
+//		}
+//	}
+//}
+
+// Fastmath /pf:fast flag
+// Look for custom memory allocator in slides to align memeory appropriately
+
 int main(int argc, char *argv[])
 {
-  alignas(sizeof(__m128)) mat mres{new float[SZ*SZ],SZ},mres2{ new float[SZ*SZ],SZ },m{new float[SZ*SZ],SZ},id{new float[SZ*SZ],SZ};
-  alignas(sizeof(__m256d)) matd mres3 { new double[SZ*SZ], SZ }, md{ new double[SZ*SZ],SZ }, idd{ new double[SZ*SZ],SZ };
+	const unsigned testCaseSize = 5, testCaseIgnoreBuffer = 2;
+  //std::size_t size = SZ * SZ * sizeof(float);
+  //std::size_t space = size + 16;
+  //void *p = std::malloc(space);
+  
+  //void *pp = std::align(16, size, p, space);
+  //std::aligned_alloc(16, SZ*SZ*sizeof(float));
+  alignas(sizeof(__m128)) mat mresSerialS{ new float[SZ*SZ],SZ}, mresSIMDS{ new float[SZ*SZ],SZ }, mresSIMDS2{ new float[SZ*SZ],SZ }, initialMatrixS{new float[SZ*SZ],SZ}, identityMatrixS{new float[SZ*SZ],SZ};
+  //alignas(sizeof(__m128d)) matd mresSerialD { new double[SZ*SZ], SZ }, mresSIMDD { new double[SZ*SZ], SZ }, initialMatrixD{ new double[SZ*SZ],SZ }, identityMatrixD{ new double[SZ*SZ],SZ };
+  alignas(sizeof(__m256d)) matd mresSerialD { new double[SZ*SZ], SZ }, mresSIMDD{ new double[SZ*SZ], SZ }, initialMatrixD{ new double[SZ*SZ],SZ }, identityMatrixD{ new double[SZ*SZ],SZ };
   using namespace std::chrono;
   using tp_t = time_point<high_resolution_clock>;
-  tp_t t1, t2, t3, t4, t5, t6;
+  tp_t serialSinglePreTimer, serialSinglePostTimer,
+	  simdSinglePreTimer, simdSinglePostTimer,
 
-  std::cout << "Each " << SZ << 'x' << SZ;
+	  serialDoublePreTimer, serialDoublePostTimer,
+	  simdDoublePreTimer, simdDoublePostTimer;
+
+  init_mat(initialMatrixS);
+  init_mat(initialMatrixD);
+  identity_mat(identityMatrixS);
+  identity_mat(identityMatrixD);
+
+  std::cout << "Each SINGLE Precision " << SZ << 'x' << SZ;
   std::cout << " matrix is " << sizeof(float)*SZ*SZ << " bytes.\n\n";
 
-  init_mat(m);
-  init_mat(md);
-  identity_mat(id);
-  identity_mat(idd);
+///////////////////////////////////////////////////////////////////////////////////////////////////////
+/////////////////////////// Single Precision Serial vs SIMD Execution BEGIN ///////////////////////////
+//////////////////////////////////////////////////////////////////////////////////////////////////////
 
-  t1 = high_resolution_clock::now();
-  matmul(mres,m,id);
-  t2 = high_resolution_clock::now();
-
-  std::cout << "/////////////////////////////\n" 
-			<< "/// Serial Multiplication ///\n"
-			<< "/////////////////////////////\n"
-			<< std::endl;
-
-  std::cout << "Initial Matrix" << "\n\n";
-  print_mat(m);
-  std::cout << "Identity Matrix" << "\n\n";
-  print_mat(id);
-  std::cout << "Resultant Matrix" << "\n\n";
-  print_mat(mres);
-
-  const auto d = duration_cast<microseconds>(t2-t1).count();
-  std::cout << "Serial Multiplication took " << d << ' ' << "microseconds.\n\n";
-
-  t3 = high_resolution_clock::now();
-  SIMD_matmul(mres2, m, id);
-  t4 = high_resolution_clock::now();
-  
   std::cout << "//////////////////////////////////////////////\n"
-			<< "//// SIMD Single Precision Multiplication ////\n"
+			<< "/// Serial Single Precision Multiplication ///\n"
 			<< "//////////////////////////////////////////////\n"
-    		<< std::endl;
+			<< std::endl;
+  double serialSingleTimeResult = 0, serialSingleExecutionAverage = 0;
+  for (int i = 0; i < (testCaseSize + testCaseIgnoreBuffer); i++)
+  {
+	  serialSinglePreTimer = high_resolution_clock::now();
+	  matmul(mresSerialS, initialMatrixS, identityMatrixS);
+	  serialSinglePostTimer = high_resolution_clock::now();
+
+	  serialSingleTimeResult = std::chrono::duration<double, std::ratio<1, 1000000>>(serialSinglePostTimer - serialSinglePreTimer).count();
+	  if (i >= testCaseIgnoreBuffer)
+	  {
+		  std::cout
+			  << "Serial SINGE Precision execution ran in "
+			  << std::setprecision(1)
+			  << serialSingleTimeResult
+			  << " microseconds."
+			  << std::endl;
+		  serialSingleExecutionAverage += serialSingleTimeResult;
+	  }
+  }
+  std::cout
+	  << "Serial SINGLE Precision execution average time after "
+	  << testCaseSize
+	  << " Iterations was "
+	  << std::setprecision(1)
+	  << (serialSingleExecutionAverage /= testCaseSize)
+	  << " microseconds.\n\n";
+
+  std::cout
+	  << "//////////////////////////////////////////////\n"
+	  << "//// SIMD Single Precision Multiplication ////\n"
+	  << "//////////////////////////////////////////////\n"
+	  << std::endl;
+
+  double SIMDSingleTimeResult = 0, SIMDExecutionAverage = 0;
+  for (int i = 0; i < (testCaseSize + testCaseIgnoreBuffer); i++)
+  {
+	  simdSinglePreTimer = high_resolution_clock::now();
+	  SIMD_MatMul(mresSIMDS, initialMatrixS, identityMatrixS);
+	  simdSinglePostTimer = high_resolution_clock::now();
+
+	  SIMDSingleTimeResult = std::chrono::duration<double, std::ratio<1, 1000000>>(simdSinglePostTimer - simdSinglePreTimer).count();
+	  if (i >= testCaseIgnoreBuffer)
+	  {
+		  std::cout
+			  << "SIMD SINGLE precision execution ran in "
+			  << std::setprecision(1)
+			  << SIMDSingleTimeResult
+			  << " microseconds."
+			  << std::endl;
+		  SIMDExecutionAverage += SIMDSingleTimeResult;
+	  }
+  }
+
+  std::cout
+	  << "SIMD SINGLE Precision execution average time after "
+	  << testCaseSize
+	  << " Iterations was "
+	  << std::setprecision(1)
+	  << (SIMDExecutionAverage /= testCaseSize)
+	  << " microseconds.\n\n";
+
+  // Factor by which Parallel execution was faster than Serial execution.
+  const auto singlePrecisionSpeedFactorDifference = (serialSingleExecutionAverage /= SIMDExecutionAverage);
+  std::cout
+	  << "Multiplying a SINGLE Precision Matrix of size " << SZ << 'x' << SZ << ','
+	  << "\nSIMD execution was "
+	  << std::setprecision(1)
+	  << singlePrecisionSpeedFactorDifference
+	  << " Times the speed of Serial execution \n" << std::endl;
 
   std::cout << "Initial Matrix" << "\n\n";
-  print_mat(m);
+  print_mat(initialMatrixS);
   std::cout << "Identity Matrix" << "\n\n";
-  print_mat(id);
+  print_mat(identityMatrixS);
   std::cout << "Resultant Matrix" << "\n\n";
-  print_mat(mres2);
+  print_mat(mresSIMDS);
 
-  const auto d2 = duration_cast<microseconds>(t4 - t3).count();
-  std::cout << "SIMD Single Precision Multiplication took " << d2 << ' ' << "microseconds.\n\n";
+///////////////////////////////////////////////////////////////////////////////////////////////////////
+/////////////////////////// Single Precision Serial vs SIMD Execution END /////////////////////////////
+//////////////////////////////////////////////////////////////////////////////////////////////////////
 
-  t5 = high_resolution_clock::now();
-  SIMD_matmul(mres3, md, idd);
-  t6 = high_resolution_clock::now();
+  std::cout << "Each DOUBLE Precision " << SZ << 'x' << SZ;
+  std::cout << " matrix is " << sizeof(double)*SZ*SZ << " bytes.\n\n";
 
-  std::cout 
+///////////////////////////////////////////////////////////////////////////////////////////////////////
+/////////////////////////// Double Precision Serial vs SIMD Execution END /////////////////////////////
+//////////////////////////////////////////////////////////////////////////////////////////////////////
+
+  serialDoublePreTimer = high_resolution_clock::now();
+  matmul(mresSerialD, initialMatrixD, identityMatrixD);
+  serialDoublePostTimer = high_resolution_clock::now();
+
+  std::cout << "//////////////////////////////////////////////\n"
+	        << "/// Serial Double Precision Multiplication ///\n"
+	        << "//////////////////////////////////////////////\n"
+	        << std::endl;
+
+  const auto serialDoubleTime = duration_cast<microseconds>(serialDoublePostTimer - serialDoublePreTimer).count();
+  std::cout << "Serial Multiplication took " << serialDoubleTime << ' ' << "microseconds.\n\n";
+
+  simdDoublePreTimer = high_resolution_clock::now();
+  SIMD_MatMul(mresSIMDD, initialMatrixD, identityMatrixD);
+  simdDoublePostTimer = high_resolution_clock::now();
+
+  std::cout
 	  << "//////////////////////////////////////////////\n"
 	  << "//// SIMD Double Precision Multiplication ////\n"
 	  << "//////////////////////////////////////////////\n"
 	  << std::endl;
 
   std::cout << "Initial Matrix" << "\n\n";
-  print_mat(md);
+  print_mat(initialMatrixD);
   std::cout << "Identity Matrix" << "\n\n";
-  print_mat(idd);
+  print_mat(identityMatrixD);
   std::cout << "Resultant Matrix" << "\n\n";
-  print_mat(mres3);
+  print_mat(mresSIMDD);
 
-  const auto d3 = duration_cast<microseconds>(t6 - t5).count();
-  std::cout << "SIMD Double Precision Multiplication took " << d3 << ' ' << "microseconds.\n";
+  const auto d5 = duration_cast<microseconds>(simdDoublePostTimer - simdDoublePreTimer).count();
+  std::cout << "SIMD Double Precision Multiplication took " << d5 << ' ' << "microseconds.\n";
 
-  const bool correct = mres == m;
-  const bool correct2 = mres2 == m;
-  const bool correct3 = mres3 == md;
+///////////////////////////////////////////////////////////////////////////////////////////////////////
+/////////////////////////// Double Precision Serial vs SIMD Execution END /////////////////////////////
+//////////////////////////////////////////////////////////////////////////////////////////////////////
 
-  delete [] mres.data;
-  delete [] mres2.data;
-  delete [] m.data;
-  delete [] id.data;
+  const bool correctSingle = mresSerialS == mresSIMDS; // Compare Serial single precision result vs simd single precision result
+  const bool correctDouble = mresSerialD == mresSIMDD; // Compare Serial double precision result vs simd double precision result
+
+  delete [] mresSerialS.data;
+  delete [] mresSIMDS.data;
+
+  delete [] mresSerialD.data;
+  delete [] mresSIMDD.data;
+
+  delete [] initialMatrixS.data;
+  delete [] initialMatrixD.data;
+
+  delete [] identityMatrixS.data;
+  delete [] identityMatrixD.data;
 
 #ifdef _WIN32
   system("pause");
 #endif
 
-  return correct && correct2 && correct3 ? 0 : -1;
+  return correctSingle && correctDouble /*&& correctDouble256*/ ? 0 : -1;
 }
