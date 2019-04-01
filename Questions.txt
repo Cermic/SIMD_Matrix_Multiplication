@@ -1,0 +1,5 @@
+1. Why hadd on doubles not work?
+
+2. How to drop in POSIX threads?
+
+3. Benchmarking marks - these are integrated into the Document?

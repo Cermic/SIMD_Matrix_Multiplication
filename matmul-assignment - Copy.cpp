@@ -4,13 +4,27 @@
 #include <cstring>
 #include <chrono>
 #include <immintrin.h>
+#include <thread>
+#include <memory>
+
 #ifdef __ORBIS__
 #include <stdlib.h>
 size_t sceLibcHeapSize = SCE_LIBC_HEAP_SIZE_EXTENDED_ALLOC_NO_LIMIT;
+// Add to include path: %SCE_ORBIS_SDK_DIR%/target/include
+#include <kernel.h>
 unsigned int sceLibcHeapExtendedAlloc = 1;
+#else
+//#include <pthread.h>
+//#define ScePthread            pthread_t
+//#define scePthreadCreate      pthread_create
+//#define scePthreadJoin        pthread_join
+//#define ScePthreadMutex       pthread_mutex_t
+//#define scePthreadMutexLock   pthread_mutex_lock
+//#define scePthreadMutexUnlock pthread_mutex_unlock
 #endif
 
 // $CXX -03 -mavx matmul_assignment.cpp
+
 #if (!defined(_MSC_VER))
 #pragma clang diagnostic ignored "-Wc++17-extensions"
 #endif
@@ -32,15 +46,6 @@ struct matd {
 	const size_t sz;
 	bool operator==(const matd &rhs) const {
 		return !std::memcmp(data, rhs.data,sz*sz * sizeof(data[0]));
-	}
-};
-
-template<typename M>
-struct genericMatrix {
-	M *data;
-	const size_t sz;
-	bool operator==(const genericMatrix &rhs) const {
-		return !std::memcmp(data, rhs.data, sz*sz * sizeof(data[0]));
 	}
 };
 
@@ -102,36 +107,56 @@ void identity_mat(T &m) {
 	}
 }
 
-template<typename MatrixType, typename StorageVectorType, typename NumberType>
-void SIMD_MatMul(MatrixType &mres, const MatrixType &m1, const MatrixType &m2) // A way to determine the type of a parameter?
+void SIMD_MatMul(mat &mres, const mat &m1, const mat &m2) // A way to determine the type of a parameter?
 {
-	size_t const simdSize = sizeof(StorageVectorType) / sizeof(NumberType);
-	StorageVectorType row, column, dotProduct, vsum;
-	float columnSections[SZ];
-	for (int i = 0; i < mres.sz; i++) 
+	pthread_t thread[num_threads];
+	using tup_t = decltype (std::make_tuple(&mres.data[0], &m1.data[0], &m2.data[0], SZ));
+	tup_t ptrs[num_threads];
+
+	auto tproc = [](void * arg) -> void * 
 	{
-		for (int j = 0; j < mres.sz; j++)
+		auto &[mres, m1, m2, sz] = *static_cast <tup_t *>(arg);
+
+		size_t const simdSize = sizeof(__m128) / sizeof(float);
+		__m128 row, column, dotProduct, vsum;
+		float columnSections[SZ];
+		for (int i = 0; i < mres.sz; i++)
 		{
-			for (int y = 0; y < mres.sz; y++)
+			for (int j = 0; j < mres.sz; j++)
 			{
-				columnSections[y] = m2.data[y *mres.sz + j];			// 1. Get column data
+				for (int y = 0; y < mres.sz; y++)
+				{
+					columnSections[y] = m2.data[y *mres.sz + j];			// 1. Get column data
+				}
+				/*_mm_dp_ps(row, column, What is the third parameter here?);
+				https://software.intel.com/sites/landingpage/IntrinsicsGuide/#text=_mm_dp_ps&expand=2160
+				*/
+				vsum = _mm_set_ps1(0.0f);
+				for (std::size_t z = 0; z < mres.sz; z += simdSize)				// Runs once per vector.	
+				{
+					row = _mm_load_ps(&m1.data[i* mres.sz + z]);				// 2. Get Row Values.
+					column = _mm_load_ps(&columnSections[z]);					// 3. Place column values into an __m128
+					dotProduct = _mm_mul_ps(row, column);						// 4. Compute dot product of row and column
+					vsum = _mm_add_ps(vsum, dotProduct);
+				}
+				vsum = _mm_hadd_ps(vsum, vsum);
+				vsum = _mm_hadd_ps(vsum, vsum);								// 5. Reduce to a single float
+				mres.data[i*mres.sz + j] = _mm_cvtss_f32(vsum);
+				//_mm_store_ss(&mres.data[i*mres.sz + j], vsum);	            // 6. Store float in appropriate index.
 			}
-			/*_mm_dp_ps(row, column, What is the third parameter here?);
-			https://software.intel.com/sites/landingpage/IntrinsicsGuide/#text=_mm_dp_ps&expand=2160
-			*/
-			vsum = _mm_set_ps1(0.0f);
-			for (std::size_t z = 0; z < mres.sz; z += simdSize)				// Runs once per vector.	
-			{
-				row = _mm_load_ps(&m1.data[i* mres.sz + z]);				// 2. Get Row Values.
-				column = _mm_load_ps(&columnSections[z]);					// 3. Place column values into an __m128
-				dotProduct = _mm_mul_ps(row, column);						// 4. Compute dot product of row and column
-				vsum = _mm_add_ps(vsum, dotProduct);
-			}
-			vsum = _mm_hadd_ps(vsum, vsum);
-			vsum = _mm_hadd_ps(vsum, vsum);								// 5. Reduce to a single float
-			mres.data[i*mres.sz + j] = _mm_cvtss_f32(vsum);	            // 6. Store float in appropriate index.
-		}				
+		}
+		return nullptr;
 	}
+
+	const auto chunk = SZ / num_threads;
+	for (unsigned i = 0; i < num_threads; i++) 
+	{
+		ptrs[i] = std::make_tuple(&mres.data[i * chunk], &m1.data[i * chunk], &m2.data[i * chunk], chunk);
+		pthread_create(&thread[i], nullptr, tproc, &ptrs[i]);
+	}
+
+	for (const auto &t : thread) { pthread_join(t, nullptr); }
+
 }
 
 void SIMD_MatMul(matd &mres, const matd &m1, const matd &m2)
@@ -155,10 +180,8 @@ void SIMD_MatMul(matd &mres, const matd &m1, const matd &m2)
 				dotProduct = _mm256_mul_pd(row, column);					// 4. Compute dot product of row and column
 				vsum = _mm256_add_pd(vsum, dotProduct);
 			}
-			//vsum = _mm256_hadd_pd(vsum, vsum); // This seems to go wrong - vsums the first 2 instead of 1,3 -> 2,4. Is this alignment? Consider broadcast here instead.
-			//vsum = _mm256_hadd_pd(vsum, vsum); // 5. Reduce to a single double in all slots
-			vsum = _mm256_hadd_pd(_mm256_permute2f128_pd(vsum, vsum, 0x20), _mm256_permute2f128_pd(vsum, vsum, 0x31));
-			vsum = _mm256_hadd_pd(_mm256_permute2f128_pd(vsum, vsum, 0x20), _mm256_permute2f128_pd(vsum, vsum, 0x31));
+			vsum = _mm256_hadd_pd(vsum, vsum); // This seems to go wrong - vsums the first 2 instead of 1,3 -> 2,4. Is this alignment? Consider broadcast here instead.
+			vsum = _mm256_hadd_pd(vsum, vsum); // 5. Reduce to a single float
 			mres.data[i*mres.sz + j] = _mm256_cvtsd_f64(vsum);	            // 6. Store float in appropriate index.
 		}
 	}
@@ -197,20 +220,16 @@ void SIMD_MatMul(matd &mres, const matd &m1, const matd &m2)
 
 int main(int argc, char *argv[])
 {
-	const unsigned testCaseSize = 5, testCaseIgnoreBuffer = 2;
+	const unsigned testCaseSize = 5, testCaseIgnoreBuffer = 2, num_threads = 8;
   //std::size_t size = SZ * SZ * sizeof(float);
   //std::size_t space = size + 16;
   //void *p = std::malloc(space);
   
   //void *pp = std::align(16, size, p, space);
   //std::aligned_alloc(16, SZ*SZ*sizeof(float));
-  /*alignas(sizeof(__m128)) mat mresSerialS{ new float[SZ*SZ],SZ}, mresSIMDS{ new float[SZ*SZ],SZ }, initialMatrixS{new float[SZ*SZ],SZ}, identityMatrixS{new float[SZ*SZ],SZ};*/
- 
+  alignas(sizeof(__m128)) mat mresSerialS{ new float[SZ*SZ],SZ}, mresSIMDS{ new float[SZ*SZ],SZ }, mresSIMDS2{ new float[SZ*SZ],SZ }, initialMatrixS{new float[SZ*SZ],SZ}, identityMatrixS{new float[SZ*SZ],SZ};
+  //alignas(sizeof(__m128d)) matd mresSerialD { new double[SZ*SZ], SZ }, mresSIMDD { new double[SZ*SZ], SZ }, initialMatrixD{ new double[SZ*SZ],SZ }, identityMatrixD{ new double[SZ*SZ],SZ };
   alignas(sizeof(__m256d)) matd mresSerialD { new double[SZ*SZ], SZ }, mresSIMDD{ new double[SZ*SZ], SZ }, initialMatrixD{ new double[SZ*SZ],SZ }, identityMatrixD{ new double[SZ*SZ],SZ };
-  alignas(sizeof(__m128)) genericMatrix<float> mresSerialS{ new float[SZ*SZ],SZ }, mresSIMDS{ new float[SZ*SZ], SZ },
-											   initialMatrixS{ new float[SZ*SZ],SZ }, identityMatrixS{ new float[SZ*SZ],SZ };
-						
-  
   using namespace std::chrono;
   using tp_t = time_point<high_resolution_clock>;
   tp_t serialSinglePreTimer, serialSinglePostTimer,
@@ -221,7 +240,6 @@ int main(int argc, char *argv[])
 
   init_mat(initialMatrixS);
   init_mat(initialMatrixD);
-
   identity_mat(identityMatrixS);
   identity_mat(identityMatrixD);
 
@@ -236,7 +254,6 @@ int main(int argc, char *argv[])
 			<< "/// Serial Single Precision Multiplication ///\n"
 			<< "//////////////////////////////////////////////\n"
 			<< std::endl;
-
   double serialSingleTimeResult = 0, serialSingleExecutionAverage = 0;
   for (int i = 0; i < (testCaseSize + testCaseIgnoreBuffer); i++)
   {
@@ -248,8 +265,7 @@ int main(int argc, char *argv[])
 	  if (i >= testCaseIgnoreBuffer)
 	  {
 		  std::cout
-			  << "Serial SINGLE Precision execution ran in "
-			  << std::fixed
+			  << "Serial SINGE Precision execution ran in "
 			  << std::setprecision(1)
 			  << serialSingleTimeResult
 			  << " microseconds."
@@ -261,7 +277,6 @@ int main(int argc, char *argv[])
 	  << "Serial SINGLE Precision execution average time after "
 	  << testCaseSize
 	  << " Iterations was "
-	  << std::fixed
 	  << std::setprecision(1)
 	  << (serialSingleExecutionAverage /= testCaseSize)
 	  << " microseconds.\n\n";
@@ -276,8 +291,7 @@ int main(int argc, char *argv[])
   for (int i = 0; i < (testCaseSize + testCaseIgnoreBuffer); i++)
   {
 	  simdSinglePreTimer = high_resolution_clock::now();
-	 // SIMD_MatMul<mat, __m128, float>(mresSIMDS, initialMatrixS, identityMatrixS);
-	  SIMD_MatMul<genericMatrix<float>, __m128, float>(mresSIMDS, initialMatrixS, identityMatrixS);
+	  SIMD_MatMul(mresSIMDS, initialMatrixS, identityMatrixS);
 	  simdSinglePostTimer = high_resolution_clock::now();
 
 	  SIMDSingleTimeResult = std::chrono::duration<double, std::ratio<1, 1000000>>(simdSinglePostTimer - simdSinglePreTimer).count();
@@ -285,7 +299,6 @@ int main(int argc, char *argv[])
 	  {
 		  std::cout
 			  << "SIMD SINGLE precision execution ran in "
-			  << std::fixed
 			  << std::setprecision(1)
 			  << SIMDSingleTimeResult
 			  << " microseconds."
@@ -298,7 +311,6 @@ int main(int argc, char *argv[])
 	  << "SIMD SINGLE Precision execution average time after "
 	  << testCaseSize
 	  << " Iterations was "
-	  << std::fixed
 	  << std::setprecision(1)
 	  << (SIMDExecutionAverage /= testCaseSize)
 	  << " microseconds.\n\n";
@@ -308,17 +320,16 @@ int main(int argc, char *argv[])
   std::cout
 	  << "Multiplying a SINGLE Precision Matrix of size " << SZ << 'x' << SZ << ','
 	  << "\nSIMD execution was "
-	  << std::fixed
 	  << std::setprecision(1)
 	  << singlePrecisionSpeedFactorDifference
 	  << " Times the speed of Serial execution \n" << std::endl;
 
-  //std::cout << "Initial Matrix" << "\n\n";
-  //print_mat(initialMatrixS);
-  //std::cout << "Identity Matrix" << "\n\n";
-  //print_mat(identityMatrixS);
-  //std::cout << "Resultant Matrix" << "\n\n";
-  //print_mat(mresSIMDS);
+  std::cout << "Initial Matrix" << "\n\n";
+  print_mat(initialMatrixS);
+  std::cout << "Identity Matrix" << "\n\n";
+  print_mat(identityMatrixS);
+  std::cout << "Resultant Matrix" << "\n\n";
+  print_mat(mresSIMDS);
 
 ///////////////////////////////////////////////////////////////////////////////////////////////////////
 /////////////////////////// Single Precision Serial vs SIMD Execution END /////////////////////////////
@@ -331,39 +342,21 @@ int main(int argc, char *argv[])
 /////////////////////////// Double Precision Serial vs SIMD Execution END /////////////////////////////
 //////////////////////////////////////////////////////////////////////////////////////////////////////
 
+  serialDoublePreTimer = high_resolution_clock::now();
+  matmul(mresSerialD, initialMatrixD, identityMatrixD);
+  serialDoublePostTimer = high_resolution_clock::now();
+
   std::cout << "//////////////////////////////////////////////\n"
-			<< "/// Serial Double Precision Multiplication ///\n"
-			<< "//////////////////////////////////////////////\n"
-			<< std::endl;
+	        << "/// Serial Double Precision Multiplication ///\n"
+	        << "//////////////////////////////////////////////\n"
+	        << std::endl;
 
-  double serialDoubleTimeResult = 0, serialDoubleExecutionAverage = 0;
-  for (int i = 0; i < (testCaseSize + testCaseIgnoreBuffer); i++)
-  {
-	  serialDoublePreTimer = high_resolution_clock::now();
-	  matmul(mresSerialD, initialMatrixD, identityMatrixD);
-	  serialDoublePostTimer = high_resolution_clock::now();
+  const auto serialDoubleTime = duration_cast<microseconds>(serialDoublePostTimer - serialDoublePreTimer).count();
+  std::cout << "Serial Multiplication took " << serialDoubleTime << ' ' << "microseconds.\n\n";
 
-	  serialDoubleTimeResult = std::chrono::duration<double, std::ratio<1, 1000000>>(serialDoublePostTimer - serialDoublePreTimer).count();
-	  if (i >= testCaseIgnoreBuffer)
-	  {
-		  std::cout
-			  << "Serial DOUBLE Precision execution ran in "
-			  << std::fixed
-			  << std::setprecision(1)
-			  << serialDoubleTimeResult
-			  << " microseconds."
-			  << std::endl;
-		  serialDoubleExecutionAverage += serialDoubleTimeResult;
-	  }
-  }
-  std::cout
-	  << "Serial DOUBLE Precision execution average time after "
-	  << testCaseSize
-	  << " Iterations was "
-	  << std::fixed
-	  << std::setprecision(1)
-	  << (serialDoubleExecutionAverage /= testCaseSize)
-	  << " microseconds.\n\n";
+  simdDoublePreTimer = high_resolution_clock::now();
+  SIMD_MatMul(mresSIMDD, initialMatrixD, identityMatrixD);
+  simdDoublePostTimer = high_resolution_clock::now();
 
   std::cout
 	  << "//////////////////////////////////////////////\n"
@@ -371,53 +364,15 @@ int main(int argc, char *argv[])
 	  << "//////////////////////////////////////////////\n"
 	  << std::endl;
 
+  std::cout << "Initial Matrix" << "\n\n";
+  print_mat(initialMatrixD);
+  std::cout << "Identity Matrix" << "\n\n";
+  print_mat(identityMatrixD);
+  std::cout << "Resultant Matrix" << "\n\n";
+  print_mat(mresSIMDD);
 
-  double simdDoubleTimeResult = 0, simdDoubleExecutionAverage = 0;
-  for (int i = 0; i < (testCaseSize + testCaseIgnoreBuffer); i++)
-  {
-	simdDoublePreTimer = high_resolution_clock::now();
-	SIMD_MatMul(mresSIMDD, initialMatrixD, identityMatrixD);
-	simdDoublePostTimer = high_resolution_clock::now();
-
-	simdDoubleTimeResult = std::chrono::duration<double, std::ratio<1, 1000000>>(simdDoublePostTimer - simdDoublePreTimer).count();
-
-	if (i >= testCaseIgnoreBuffer)
-	{
-		std::cout
-			<< "Serial DOUBLE Precision execution ran in "
-			<< std::fixed
-			<< std::setprecision(1)
-			<< simdDoubleTimeResult
-			<< " microseconds."
-			<< std::endl;
-		simdDoubleExecutionAverage += simdDoubleTimeResult;
-	}
-  }
-  std::cout
-	  << "Serial DOUBLE Precision execution average time after "
-	  << testCaseSize
-	  << " Iterations was "
-	  << std::fixed
-	  << std::setprecision(1)
-	  << (simdDoubleExecutionAverage /= testCaseSize)
-	  << " microseconds.\n\n";
-
-  // Factor by which Parallel execution was faster than Serial execution.
-  const auto doublePrecisionSpeedFactorDifference = (serialDoubleExecutionAverage /= simdDoubleExecutionAverage);
-  std::cout
-	  << "Multiplying a DOUBLE Precision Matrix of size " << SZ << 'x' << SZ << ','
-	  << "\nSIMD execution was "
-	  << std::fixed
-	  << std::setprecision(1)
-	  << doublePrecisionSpeedFactorDifference
-	  << " Times the speed of Serial execution \n" << std::endl;
-
-  //std::cout << "Initial Matrix" << "\n\n";
-  //print_mat(initialMatrixD);
-  //std::cout << "Identity Matrix" << "\n\n";
-  //print_mat(identityMatrixD);
-  //std::cout << "Resultant Matrix" << "\n\n";
-  //print_mat(mresSIMDD);
+  const auto d5 = duration_cast<microseconds>(simdDoublePostTimer - simdDoublePreTimer).count();
+  std::cout << "SIMD Double Precision Multiplication took " << d5 << ' ' << "microseconds.\n";
 
 ///////////////////////////////////////////////////////////////////////////////////////////////////////
 /////////////////////////// Double Precision Serial vs SIMD Execution END /////////////////////////////
@@ -442,5 +397,5 @@ int main(int argc, char *argv[])
   system("pause");
 #endif
 
-  return correctSingle && correctDouble ? 0 : -1;
+  return correctSingle && correctDouble /*&& correctDouble256*/ ? 0 : -1;
 }
