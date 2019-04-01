@@ -157,6 +157,7 @@ void SIMD_MatMul(matd &mres, const matd &m1, const matd &m2)
 			}
 			//vsum = _mm256_hadd_pd(vsum, vsum); // This seems to go wrong - vsums the first 2 instead of 1,3 -> 2,4. Is this alignment? Consider broadcast here instead.
 			//vsum = _mm256_hadd_pd(vsum, vsum); // 5. Reduce to a single double in all slots
+			// Still consider using broadcast to see if it's faster given the modern CPU.
 			vsum = _mm256_hadd_pd(_mm256_permute2f128_pd(vsum, vsum, 0x20), _mm256_permute2f128_pd(vsum, vsum, 0x31));
 			vsum = _mm256_hadd_pd(_mm256_permute2f128_pd(vsum, vsum, 0x20), _mm256_permute2f128_pd(vsum, vsum, 0x31));
 			mres.data[i*mres.sz + j] = _mm256_cvtsd_f64(vsum);	            // 6. Store float in appropriate index.
